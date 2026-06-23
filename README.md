@@ -97,6 +97,7 @@ All tunables are environment variables with sane defaults (see `app/config.py`):
 | `EMBEDDING_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | Local embedding model |
 | `CHUNK_SIZE` | `800` | Characters per chunk |
 | `CHUNK_OVERLAP` | `150` | Overlap between consecutive chunks |
+| `MIN_SCORE` | `0.4` | Minimum cosine similarity for a result to be returned by `/search` |
 
 ## API
 
@@ -119,9 +120,14 @@ Response:
       "score": 0.82,
       "text": "Contenu du passage correspondant..."
     }
-  ]
+  ],
+  "message": null
 }
 ```
+
+If no chunk scores at or above `MIN_SCORE`, `results` is an empty list and
+`message` is set to `"No relevant results found for this query."` instead of
+silently returning low-confidence noise.
 
 `score` is a cosine similarity in `[-1, 1]` (embeddings are L2-normalized and
 FAISS uses inner-product search), higher is more relevant.
@@ -161,6 +167,12 @@ whether the API found a persisted index at startup.
   vector at row `i` always corresponds to `metadata[i]`. A FAISS search
   returns row numbers (`idx`); `self.metadata[idx]` is what turns "row 47
   scored highest" into an actual document name, page number, and text.
+- **Minimum score threshold**: vector similarity search has no concept of
+  "no relevant result" — it always returns the `top_k` closest chunks, even
+  if none of them actually answer the query, just with low scores.
+  `SearchService` filters out results below `MIN_SCORE` (default `0.3`) so
+  `/search` returns an empty `results` list instead of low-confidence noise
+  when nothing in the corpus is a real match.
 - **Index loading**: the API loads the index once at startup (not per
   request) for performance; it must be restarted after re-ingestion.
 - **Single Dockerfile**: the same image runs both the ingestion CLI and the

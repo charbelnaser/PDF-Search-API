@@ -21,7 +21,7 @@ async def lifespan(app: FastAPI):
     if Settings.INDEX_PATH.exists() and Settings.METADATA_PATH.exists():
         embedder = Embedder(Settings.EMBEDDING_MODEL)
         store = VectorStore.load(Settings.INDEX_PATH, Settings.METADATA_PATH)
-        service = SearchService(embedder, store)
+        service = SearchService(embedder, store, min_score=Settings.MIN_SCORE)
         logger.info("Loaded index with %d vectors from %s", store.index.ntotal, Settings.INDEX_PATH)
     else:
         service = None
@@ -48,4 +48,5 @@ def search(request: SearchRequest) -> SearchResponse:
             detail="Index not loaded. Run the ingestion CLI first, then restart the API.",
         )
     results = service.search(request.query, request.top_k)
-    return SearchResponse(query=request.query, results=results)
+    message = "No relevant results found for this query." if not results else None
+    return SearchResponse(query=request.query, results=results, message=message)

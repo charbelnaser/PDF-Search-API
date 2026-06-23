@@ -13,3 +13,5 @@ class Settings:
 
     CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", 800))
     CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", 150))
+
+    MIN_SCORE = float(os.environ.get("MIN_SCORE", 0.4))
