@@ -52,13 +52,21 @@ uvicorn app.api.main:app --reload
 docker compose build
 
 # 2. Place your PDFs in ./pdfs, then ingest them (builds data/index.faiss + data/metadata.json)
+#    Skip this step if you've already ingested and nothing in ./pdfs changed.
 docker compose run --rm ingest
 
-# 3. Start the API (loads the index from ./data)
-docker compose up
+# 3. Start the API (loads the index from ./data), detached
+docker compose up -d
 ```
 
 The API is then available at `http://localhost:8000` (Swagger UI at `/docs`).
+
+Run with `-d` (detached) rather than attached to your terminal: the embedding
+model takes several seconds to load on startup, and if `docker compose up`
+is left attached and the terminal is interrupted (Ctrl+C, closed window)
+during that window, Compose escalates to `SIGKILL` and the container dies
+mid-startup. Check logs/status with `docker compose logs -f api` /
+`docker compose ps`, and stop it with `docker compose down`.
 
 Test it:
 ```bash
@@ -132,16 +140,42 @@ whether the API found a persisted index at startup.
 - **Chunk identity**: `chunk_index` resets to 0 per document and increases in
   reading order (page by page), so `(document_name, chunk_index)` uniquely
   identifies a chunk.
-- **Vector store**: FAISS `IndexFlatIP` (exact search, no approximation) with
-  L2-normalized embeddings, so inner product == cosine similarity. Flat
-  index is the simplest correct choice at the scale of a few PDFs; it
-  doesn't scale to millions of vectors, but that's out of scope here.
+- **Vector store**: FAISS `IndexFlatIP` (exact search, no approximation).
+  `IndexFlatIP` computes a plain inner product (dot product), which is *not*
+  cosine similarity in general — it only becomes cosine similarity because
+  `Embedder.embed()` calls `model.encode(..., normalize_embeddings=True)`,
+  L2-normalizing every vector (chunks at ingestion time, queries at search
+  time) to unit length. For unit vectors, `dot(a, b) == cos(θ)`, so the
+  `score` returned by `/search` is an exact cosine similarity, not an
+  approximation. `IndexFlatIP` returns the `top_k` vectors with the
+  *highest* dot product, sorted descending (best match first) — the
+  opposite convention from a distance-based index like `IndexFlatL2`, where
+  *lower* is better. "Highest = best" lines up directly with cosine
+  similarity (1.0 = identical direction, -1.0 = opposite), so no score
+  inversion is needed anywhere in the search code. Flat index is the
+  simplest correct choice at the scale of a few PDFs; it doesn't scale to
+  millions of vectors, but that's out of scope here.
+- **Metadata storage**: `data/metadata.json` and `data/index.faiss` are
+  linked purely by list position, not by an explicit ID field. `VectorStore.add()`
+  always appends to the FAISS index and the metadata list together, so the
+  vector at row `i` always corresponds to `metadata[i]`. A FAISS search
+  returns row numbers (`idx`); `self.metadata[idx]` is what turns "row 47
+  scored highest" into an actual document name, page number, and text.
 - **Index loading**: the API loads the index once at startup (not per
   request) for performance; it must be restarted after re-ingestion.
 - **Single Dockerfile**: the same image runs both the ingestion CLI and the
   API; `docker-compose.yml` defines them as two services (`ingest`, `api`)
   built from that one image, sharing code and dependencies. `data/` is the
   contract between them.
+- **Embedding model baked into the image at build time**: the `Dockerfile`
+  runs `SentenceTransformer(...)` once during `docker build` so the ~470MB
+  model is downloaded into the image layer, instead of every fresh container
+  re-downloading it from Hugging Face at startup. This was a real failure
+  mode during development — on a restrictive network, the runtime download
+  stalled partway through, leaving the container unable to serve requests
+  for several minutes. Baking it in trades a slightly longer/heavier image
+  for a startup that needs no network access at all (~5s instead of
+  minutes, or an indefinite hang on a bad network).
 
 ## Solution Review
 
