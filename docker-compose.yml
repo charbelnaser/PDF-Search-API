@@ -1,0 +1,15 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+
+  ingest:
+    build: .
+    volumes:
+      - ./data:/app/data
+      - ./pdfs:/pdfs:ro
+    command: ["python", "-m", "app.ingest", "/pdfs"]
+    profiles: ["ingest"]

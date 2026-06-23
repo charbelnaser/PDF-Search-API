@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+data/*.faiss
+data/*.json
+!data/.gitkeep
