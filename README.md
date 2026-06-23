@@ -25,6 +25,7 @@ app/
     search_service.py  # embed query + search the store
 data/                  # persisted index.faiss + metadata.json (volume-mounted)
 Dockerfile
+docker-compose.yml     # api + ingest services, both built from the Dockerfile
 requirements.txt
 ```
 
@@ -43,62 +44,40 @@ python -m app.ingest ./pdfs
 uvicorn app.api.main:app --reload
 ```
 
-## Installing Docker
-
-You need Docker installed and running before you can build or run the image.
-
-**Windows / macOS**
-1. Download and install [Docker Desktop](https://www.docker.com/products/docker-desktop/).
-2. On Windows, Docker Desktop requires WSL2 — the installer will prompt you to enable it if it isn't already (you may need to restart once).
-3. Launch Docker Desktop and wait for it to report "Engine running" (whale icon in the system tray / menu bar).
-4. Verify from a terminal:
-   ```bash
-   docker --version
-   docker info
-   ```
-   `docker info` should return cluster/engine details without errors. If it errors with something like "cannot connect to the Docker daemon", Docker Desktop isn't running yet — start it and wait a few seconds.
-
-**Linux**
-Follow the [official install guide](https://docs.docker.com/engine/install/) for your distribution (e.g. `apt-get install docker.io` on Debian/Ubuntu, or the Docker Engine repo for the latest version), then start the daemon: `sudo systemctl enable --now docker`.
 
 ## Running with Docker
 
 ```bash
-# Build the image
-docker build -t pdf-search-api .
+# 1. Build the image
+docker compose build
 
-# 1. Download the PDFs locally, e.g. into ./pdfs
+# 2. Place your PDFs in ./pdfs, then ingest them (builds data/index.faiss + data/metadata.json)
+docker compose run --rm ingest
 
-# 2. Run ingestion inside a container, mounting both the PDFs (read-only)
-#    and the data/ folder (where the index gets persisted)
-docker run --rm \
-  -v "$(pwd)/pdfs:/pdfs:ro" \
-  -v "$(pwd)/data:/app/data" \
-  pdf-search-api \
-  python -m app.ingest /pdfs
+# 3. Start the API (loads the index from ./data)
+docker compose up
+```
 
-# 3. Verify the index was created
-ls data/   # expect index.faiss and metadata.json
+The API is then available at `http://localhost:8000` (Swagger UI at `/docs`).
 
-# 4. Start the API, mounting the same data/ folder so it can load the index
-docker run --rm -p 8000:8000 \
-  -v "$(pwd)/data:/app/data" \
-  pdf-search-api
-
-# 5. Call the search endpoint
+Test it:
+```bash
 curl -X POST http://localhost:8000/search \
   -H "Content-Type: application/json" \
   -d '{"query": "Quelle est la position du document sur les politiques publiques ?", "top_k": 5}'
 ```
 
-On Windows PowerShell, replace `$(pwd)` with `${PWD}`.
+### Adding new data / rebuilding the index
 
-### Rebuilding the index
-
-If the PDF folder changes, just re-run the ingestion command (step 2 above).
-It overwrites `data/index.faiss` and `data/metadata.json` from scratch — there
-is no incremental update. Restart the API container afterwards so it picks up
-the new index (it's loaded once at startup).
+If you add or change PDFs in `./pdfs`:
+```bash
+docker compose run --rm ingest
+docker compose restart api
+```
+Ingestion always rebuilds `data/index.faiss` and `data/metadata.json` from
+scratch from everything currently in `./pdfs` — there's no incremental
+update. The API only loads the index once at startup, so it must be
+restarted to pick up the new one.
 
 ### Configuration
 
@@ -159,9 +138,10 @@ whether the API found a persisted index at startup.
   doesn't scale to millions of vectors, but that's out of scope here.
 - **Index loading**: the API loads the index once at startup (not per
   request) for performance; it must be restarted after re-ingestion.
-- **Single Dockerfile**: same image runs both the ingestion CLI (via
-  `docker run ... python -m app.ingest ...`) and the API (default `CMD`),
-  sharing code and dependencies. `data/` is the contract between them.
+- **Single Dockerfile**: the same image runs both the ingestion CLI and the
+  API; `docker-compose.yml` defines them as two services (`ingest`, `api`)
+  built from that one image, sharing code and dependencies. `data/` is the
+  contract between them.
 
 ## Solution Review
 
